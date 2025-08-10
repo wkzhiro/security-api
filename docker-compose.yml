@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatbot-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Azure OpenAI
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME}
+      # MySQL
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      # CosmosDB
+      - COSMOSDB_ENDPOINT=${COSMOSDB_ENDPOINT}
+      - COSMOSDB_KEY=${COSMOSDB_KEY}
+      - COSMOSDB_DATABASE_NAME=${COSMOSDB_DATABASE_NAME:-chatbot}
+      - COSMOSDB_CONTAINER_NAME=${COSMOSDB_CONTAINER_NAME:-conversations}
+    volumes:
+      # 開発時のホットリロード用（本番では削除）
+      - .:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
