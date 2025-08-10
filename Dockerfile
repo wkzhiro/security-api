@@ -19,11 +19,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash fastapi
-RUN chown -R fastapi:fastapi /app
-USER fastapi
-
 # Expose port
 EXPOSE 8000
 
