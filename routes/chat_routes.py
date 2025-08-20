@@ -5,12 +5,15 @@ from models.chat_models import ChatRequest, ChatResponse, ConversationRecord
 from services.azure_openai_service import azure_openai_service
 from services.mysql_service import mysql_service
 from services.cosmosdb_service import cosmosdb_service
+from dependencies.security import get_current_user
+from typing import Dict
+from fastapi import Depends
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(get_current_user)])
 async def chat_endpoint(request: ChatRequest):
     """チャットメッセージを処理するエンドポイント"""
     try:
@@ -66,12 +69,12 @@ async def chat_endpoint(request: ChatRequest):
             detail=f"予期しないエラーが発生しました: {str(e)}"
         )
 
-@router.get("/health")
+@router.get("/health", dependencies=[Depends(get_current_user)])
 async def health_check():
     """ヘルスチェックエンドポイント"""
     return {"status": "healthy", "service": "chatbot-api"}
 
-@router.get("/chat/sessions/{user_email}")
+@router.get("/chat/sessions/{user_email}", dependencies=[Depends(get_current_user)])
 async def get_user_sessions(user_email: str):
     """ユーザーのチャットセッションを取得"""
     try:
@@ -81,7 +84,7 @@ async def get_user_sessions(user_email: str):
         logger.error(f"Error retrieving user sessions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/chat/history/{user_email}")
+@router.get("/chat/history/{user_email}", dependencies=[Depends(get_current_user)])
 async def get_conversation_history(user_email: str, limit: int = 20, source: str = "mysql"):
     """ユーザーの会話履歴を取得（MySQLまたはCosmosDBから）"""
     try:
