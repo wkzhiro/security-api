@@ -11,11 +11,11 @@
 
 ## 1. 既存のVNet内VMへの接続
 
-```bash
 # VMにSSH接続（公開IPまたはBastion経由）
-ssh -i <your-key.pem> <username>@<VM-PUBLIC-IP>
-# 例: ssh -i myKey.pem tech0admin@20.243.169.166
-```
+
+ssh -i <your-key.pem> `<username>`@`<VM-PUBLIC-IP>`
+
+例: ssh -i myKey.pem azureuser@20.243.161.33
 
 ## 2. 必要なソフトウェアのインストール
 
@@ -230,22 +230,22 @@ on:
 jobs:
   build-and-deploy:
     runs-on: [self-hosted, linux, x64, azure-vnet, rhel9, podman]
-    
+  
     steps:
     - uses: actions/checkout@v4
-    
+  
     - name: Container Runtime Check
       run: |
         echo "Container runtime version:"
         podman --version || docker --version
-    
+  
     - name: Login to ACR
       run: |
         echo ${{ secrets.ACR_PASSWORD }} | podman login \
           ${{ secrets.ACR_LOGIN_SERVER }} \
           -u ${{ secrets.ACR_USERNAME }} \
           --password-stdin
-    
+  
     - name: Build and Push
       run: |
         # Podmanを使用（dockerコマンドはpodmanのエイリアス）
@@ -257,7 +257,7 @@ jobs:
 
 リポジトリのSettings → Secrets and variablesで以下を設定：
 
-- `ACR_LOGIN_SERVER`: <acr-name>.azurecr.io
+- `ACR_LOGIN_SERVER`: `<acr-name>`.azurecr.io
 - `ACR_USERNAME`: ACRのユーザー名
 - `ACR_PASSWORD`: ACRのパスワード
 - `IMAGE_NAME`: Dockerイメージ名
@@ -340,14 +340,15 @@ podman info
 ## セキュリティベストプラクティス
 
 1. **最小権限の原則**
+
    - ランナー専用のユーザーアカウントを作成
    - 必要最小限の権限のみ付与
-
 2. **ネットワークセキュリティ**
+
    - VMのNSGで不要なポートを閉じる
    - VNet内通信のみに制限
-
 3. **定期メンテナンス**
+
    - OSとDockerの定期更新
    - ランナーソフトウェアの更新
 

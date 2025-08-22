@@ -25,6 +25,11 @@ jobs:
   build-and-deploy:
     runs-on: self-hosted
     
+    outputs:
+      image-tag: ${{ steps.tags.outputs.commit_tag }}
+      app-url: ${{ steps.deploy-info.outputs.app-url }}
+      deployment-status: ${{ steps.deploy.outcome }}
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -40,14 +45,21 @@ jobs:
     
     - name: Log in to Azure Container Registry
       run: |
-        echo ${{ secrets.ACR_PASSWORD }} | podman login \
-          ${{ secrets.ACR_LOGIN_SERVER }} \
-          -u ${{ secrets.ACR_USERNAME }} \
-          --password-stdin
+        echo "Logging into Azure Container Registry..."
+        if ! echo "${{ secrets.ACR_PASSWORD }}" | podman login \
+          "${{ secrets.ACR_LOGIN_SERVER }}" \
+          -u "${{ secrets.ACR_USERNAME }}" \
+          --password-stdin; then
+          echo "❌ Failed to login to Azure Container Registry"
+          exit 1
+        fi
+        echo "✅ Successfully logged into ACR: ${{ secrets.ACR_LOGIN_SERVER }}"
 
     - name: Generate image tags
       id: tags
       run: |
+        echo "🏷️ Generating image tags..."
+        
         COMMIT_TAG="${{ steps.commit.outputs.short_sha }}"
         BRANCH_TAG="${{ steps.commit.outputs.branch }}-${{ steps.commit.outputs.short_sha }}"
         TIMESTAMP_TAG="${{ steps.commit.outputs.timestamp }}-${{ steps.commit.outputs.short_sha }}"
@@ -59,68 +71,154 @@ jobs:
         # メインブランチの場合はlatestタグも追加
         if [[ "${{ steps.commit.outputs.branch }}" == "main" || "${{ steps.commit.outputs.branch }}" == "master" ]]; then
           TAGS="${TAGS},${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:latest"
+          echo "📌 Main branch detected - will also tag as 'latest'"
         fi
         
         echo "tags=${TAGS}" >> $GITHUB_OUTPUT
         echo "commit_tag=${COMMIT_TAG}" >> $GITHUB_OUTPUT
         
-        echo "Generated tags:"
+        echo "📋 Generated tags:"
         echo "${TAGS}" | tr ',' '\n'
+        echo "✅ Tag generation completed"
 
     - name: Build Docker image
       run: |
-        podman build \
-          -t ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }} \
+        echo "Building Docker image..."
+        IMAGE_TAG="${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }}"
+        echo "Target image: $IMAGE_TAG"
+        
+        if ! podman build \
+          -t "$IMAGE_TAG" \
           -f ./Dockerfile \
-          .
+          .; then
+          echo "❌ Failed to build Docker image"
+          exit 1
+        fi
+        
+        echo "✅ Successfully built Docker image: $IMAGE_TAG"
     
     - name: Tag additional versions
       run: |
-        # メインブランチの場合はlatestタグも追加
-        if [[ "${{ steps.commit.outputs.branch }}" == "main" || "${{ steps.commit.outputs.branch }}" == "master" ]]; then
-          podman tag \
-            ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }} \
-            ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:latest
-        fi
+        echo "Tagging additional image versions..."
+        BASE_IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }}"
+        BRANCH_TAG="${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.commit.outputs.branch }}-${{ steps.commit.outputs.short_sha }}"
         
         # ブランチタグを追加
-        podman tag \
-          ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }} \
-          ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.commit.outputs.branch }}-${{ steps.commit.outputs.short_sha }}
+        if ! podman tag "$BASE_IMAGE" "$BRANCH_TAG"; then
+          echo "❌ Failed to tag branch version"
+          exit 1
+        fi
+        echo "✅ Tagged branch version: $BRANCH_TAG"
+        
+        # メインブランチの場合はlatestタグも追加
+        if [[ "${{ steps.commit.outputs.branch }}" == "main" || "${{ steps.commit.outputs.branch }}" == "master" ]]; then
+          LATEST_TAG="${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:latest"
+          if ! podman tag "$BASE_IMAGE" "$LATEST_TAG"; then
+            echo "❌ Failed to tag latest version"
+            exit 1
+          fi
+          echo "✅ Tagged latest version: $LATEST_TAG"
+        fi
     
     - name: Push all tags to ACR
       run: |
+        echo "Pushing images to Azure Container Registry..."
+        
         # コミットタグをプッシュ
-        podman push ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }}
+        COMMIT_IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }}"
+        echo "Pushing commit tag: $COMMIT_IMAGE"
+        if ! podman push "$COMMIT_IMAGE"; then
+          echo "❌ Failed to push commit tag"
+          exit 1
+        fi
+        echo "✅ Pushed commit tag successfully"
         
         # ブランチタグをプッシュ
-        podman push ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.commit.outputs.branch }}-${{ steps.commit.outputs.short_sha }}
+        BRANCH_IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.commit.outputs.branch }}-${{ steps.commit.outputs.short_sha }}"
+        echo "Pushing branch tag: $BRANCH_IMAGE"
+        if ! podman push "$BRANCH_IMAGE"; then
+          echo "❌ Failed to push branch tag"
+          exit 1
+        fi
+        echo "✅ Pushed branch tag successfully"
         
         # メインブランチの場合はlatestもプッシュ
         if [[ "${{ steps.commit.outputs.branch }}" == "main" || "${{ steps.commit.outputs.branch }}" == "master" ]]; then
-          podman push ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:latest
+          LATEST_IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:latest"
+          echo "Pushing latest tag: $LATEST_IMAGE"
+          if ! podman push "$LATEST_IMAGE"; then
+            echo "❌ Failed to push latest tag"
+            exit 1
+          fi
+          echo "✅ Pushed latest tag successfully"
         fi
+        
+        echo "✅ All images pushed to ACR successfully"
 
     - name: Log in to Azure
       if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
       uses: azure/login@v1
       with:
-        creds: |
-          {
-            "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
-            "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
-            "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
-            "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
-          }
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Verify Azure account context
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      run: |
+        echo "Verifying Azure account context..."
+        az account show --output table
+        
+        echo "Checking subscription ID..."
+        CURRENT_SUB=$(az account show --query id -o tsv)
+        EXPECTED_SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+        
+        if [ "$CURRENT_SUB" != "$EXPECTED_SUB" ]; then
+          echo "❌ Error: Wrong subscription active"
+          echo "Expected: $EXPECTED_SUB"
+          echo "Current:  $CURRENT_SUB"
+          exit 1
+        fi
+        
+        echo "✅ Verified: Correct subscription is active"
+        echo "Tenant: $(az account show --query tenantId -o tsv)"
+        echo "Subscription: $(az account show --query name -o tsv)"
 
     - name: Deploy to Azure Web App
       if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      id: deploy
       uses: azure/webapps-deploy@v3
       with:
         app-name: ${{ secrets.WEBAPP_NAME }}
         images: ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }}
 
-    - name: Azure logout
+    - name: Verify deployment
       if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-      run: az logout
-      continue-on-error: true
+      id: deploy-info
+      run: |
+        echo "🔍 Verifying deployment to Azure Web App..."
+        APP_NAME="${{ secrets.WEBAPP_NAME }}"
+        
+        # Get app details
+        echo "📋 Getting app information..."
+        az webapp show --name "$APP_NAME" --resource-group "$(az webapp list --query "[?name=='$APP_NAME'].resourceGroup" -o tsv)" --query "{name:name,state:state,defaultHostName:defaultHostName}" -o table
+        
+        # Check if the deployment was successful
+        APP_STATE=$(az webapp show --name "$APP_NAME" --resource-group "$(az webapp list --query "[?name=='$APP_NAME'].resourceGroup" -o tsv)" --query "state" -o tsv)
+        
+        if [ "$APP_STATE" = "Running" ]; then
+          echo "✅ Web App is running successfully"
+          APP_URL="https://$(az webapp show --name "$APP_NAME" --resource-group "$(az webapp list --query "[?name=='$APP_NAME'].resourceGroup" -o tsv)" --query "defaultHostName" -o tsv)"
+          echo "🌐 Application URL: $APP_URL"
+          echo "app-url=$APP_URL" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Web App is not in running state: $APP_STATE"
+          exit 1
+        fi
+        
+        echo "✅ Deployment verification completed"
+
+    - name: Azure logout
+      if: always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      run: |
+        echo "Logging out from Azure..."
+        az logout || echo "Logout failed or already logged out"
+        echo "Azure logout completed"
