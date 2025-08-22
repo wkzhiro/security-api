@@ -24,7 +24,10 @@ env:
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    
+    permissions:      
+      id-token: write 
+      contents: read  
+
     outputs:
       image-tag: ${{ steps.tags.outputs.commit_tag }}
       app-url: ${{ steps.deploy-info.outputs.app-url }}
