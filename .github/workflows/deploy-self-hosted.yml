@@ -36,15 +36,14 @@ jobs:
         echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
         echo "timestamp=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
+    # Buildxセットアップはスキップ（Podmanでは不要）
+    
     - name: Log in to Azure Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ secrets.ACR_LOGIN_SERVER }}
-        username: ${{ secrets.ACR_USERNAME }}
-        password: ${{ secrets.ACR_PASSWORD }}
+      run: |
+        echo ${{ secrets.ACR_PASSWORD }} | podman login \
+          ${{ secrets.ACR_LOGIN_SERVER }} \
+          -u ${{ secrets.ACR_USERNAME }} \
+          --password-stdin
 
     - name: Generate image tags
       id: tags
@@ -68,22 +67,39 @@ jobs:
         echo "Generated tags:"
         echo "${TAGS}" | tr ',' '\n'
 
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile
-        push: true
-        tags: ${{ steps.tags.outputs.tags }}
-        labels: |
-          org.opencontainers.image.title=${{ secrets.IMAGE_NAME }}
-          org.opencontainers.image.description=FastAPI Security Chatbot App
-          org.opencontainers.image.version=${{ steps.commit.outputs.short_sha }}
-          org.opencontainers.image.revision=${{ github.sha }}
-          org.opencontainers.image.created=${{ steps.commit.outputs.timestamp }}
-          org.opencontainers.image.source=${{ github.repositoryUrl }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+    - name: Build Docker image
+      run: |
+        podman build \
+          -t ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }} \
+          -f ./Dockerfile \
+          .
+    
+    - name: Tag additional versions
+      run: |
+        # メインブランチの場合はlatestタグも追加
+        if [[ "${{ steps.commit.outputs.branch }}" == "main" || "${{ steps.commit.outputs.branch }}" == "master" ]]; then
+          podman tag \
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }} \
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:latest
+        fi
+        
+        # ブランチタグを追加
+        podman tag \
+          ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }} \
+          ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.commit.outputs.branch }}-${{ steps.commit.outputs.short_sha }}
+    
+    - name: Push all tags to ACR
+      run: |
+        # コミットタグをプッシュ
+        podman push ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.tags.outputs.commit_tag }}
+        
+        # ブランチタグをプッシュ
+        podman push ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ steps.commit.outputs.branch }}-${{ steps.commit.outputs.short_sha }}
+        
+        # メインブランチの場合はlatestもプッシュ
+        if [[ "${{ steps.commit.outputs.branch }}" == "main" || "${{ steps.commit.outputs.branch }}" == "master" ]]; then
+          podman push ${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.IMAGE_NAME }}:latest
+        fi
 
     - name: Log in to Azure
       if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
